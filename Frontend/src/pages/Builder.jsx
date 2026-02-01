@@ -28,15 +28,16 @@ const dataURLToBlob = (dataURL) => {
 /* ---------- TEMP FACE DATA (mock backend) ---------- */
 
 const DEFAULT_LAYER = {
-    neck: 0,
-    ears: 1,
-    head: 2,
+   neck: 0,
+    head: 1,
     hair: 3,
+    ears: 0,
     eyes: 4,
     nose: 4,
+    eyebrows: 2,
     lips: 4,
     marks: 5,
-    accessories: 6,
+    accessories: 6
 };
 
 const FACE_PARTS = {
