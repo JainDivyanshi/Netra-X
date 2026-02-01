@@ -29,9 +29,9 @@ const dataURLToBlob = (dataURL) => {
 
 const DEFAULT_LAYER = {
     neck: 0,
-    head: 1,
-    hair: 2,
-    ears: 3,
+    ears: 1,
+    head: 2,
+    hair: 3,
     eyes: 4,
     nose: 4,
     lips: 4,
