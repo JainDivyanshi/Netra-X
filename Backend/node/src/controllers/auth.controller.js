@@ -10,6 +10,18 @@ function signToken(user) {
   );
 }
 
+function setAuthCookie(res, token) {
+  const isProd = process.env.NODE_ENV === "production";
+
+  res.cookie("authtoken", token, {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: "lax",
+    maxAge: 7 * 24 * 60 * 60 * 1000
+  });
+}
+
+
 async function register(req, res) {
   /*
     EXPECTED REQUEST FROM FRONTEND:
@@ -29,6 +41,8 @@ async function register(req, res) {
       "message": "Registered successfully",
       "token": "<jwt>",
       "user": { "id": "...", "name": "...", "email": "..." }
+
+      Changed, now sending cookie
     }
 
     NOTE: PRD says "no verification/confirmation" :contentReference[oaicite:2]{index=2}
@@ -48,11 +62,13 @@ async function register(req, res) {
 
   const token = signToken(user);
 
+  setAuthCookie(res, token);
+
   res.status(201).json({
     message: "Registered successfully",
-    token,
     user: { id: user._id, name: user.name, email: user.email }
   });
+
 }
 
 async function login(req, res) {
@@ -67,6 +83,8 @@ async function login(req, res) {
       "message": "Login success",
       "token": "<jwt>",
       "user": { "id": "...", "name": "...", "email": "..." }
+
+      changed, now checking cookie
     }
   */
 
@@ -82,21 +100,24 @@ async function login(req, res) {
 
   const token = signToken(user);
 
+  setAuthCookie(res, token);
+
   res.json({
     message: "Login success",
-    token,
     user: { id: user._id, name: user.name, email: user.email }
   });
+
 }
 
 async function logout(req, res) {
-  /*
-    LOGOUT DESIGN CHOICE:
-    JWT cannot be "destroyed" server-side unless you implement a denylist/token-store.
-    For now logout = frontend deletes token.
+  const isProd = process.env.NODE_ENV === "production";
 
-    RESPONSE: { message: "Logged out" }
-  */
+  res.clearCookie("authtoken", {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: "lax"
+  });
+
   res.json({ message: "Logged out" });
 }
 

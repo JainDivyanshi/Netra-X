@@ -1,13 +1,11 @@
 const jwt = require("jsonwebtoken");
 
 function authRequired(req, res, next) {
-  const header = req.headers.authorization;
+  const token = req.cookies?.authtoken;
 
-  if (!header || !header.startsWith("Bearer ")) {
-    return res.status(401).json({ error: "Missing token" });
+  if (!token) {
+    return res.status(401).json({ error: "Missing auth cookie" });
   }
-
-  const token = header.split(" ")[1];
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || "netrax_secret");
