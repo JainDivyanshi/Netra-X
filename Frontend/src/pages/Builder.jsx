@@ -361,15 +361,15 @@ const Builder = () => {
                     <div className="absolute inset-0 pointer-events-none"
                         style={{
                             backgroundImage: 'radial-gradient(circle, #1C1C2E 1px, transparent 1px)',
-                            backgroundSize: '24px 24px',
+                            backgroundSize: '24px 24px', // 500H 400w
                         }}/>
 
                     <div className="absolute bottom-4 left-1/2 -translate-x-1/2 text-[10px] tracking-widest"
-                        style={{ color: '#1E1E34' }}>700 × 500 px</div>
+                        style={{ color: '#1E1E34' }}>400 × 500 px</div>
 
                     <div className="relative shadow-2xl"
                         style={{ boxShadow: '0 0 0 1px #1A1A2E, 0 32px 64px rgba(0,0,0,0.8)' }}>
-                        <Stage ref={stageRef} width={700} height={500}
+                        <Stage ref={stageRef} width={400} height={500}
                             style={{ background: '#F5F4F0', display: 'block' }}
                             onMouseDown={(e) => { if (e.target === e.target.getStage()) setSelectedId(null); }}>
                             <Layer>
