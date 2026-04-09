@@ -23,3 +23,8 @@ dist-ssr
 *.sln
 *.sw?
 misc
+
+
+test.jsx
+../facialdatasetloader.py
+public\Facial Dataset

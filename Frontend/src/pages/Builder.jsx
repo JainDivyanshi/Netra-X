@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { Stage, Layer, Image as KonvaImage, Transformer } from 'react-konva';
 import useImage from 'use-image';
 import ResultsPage from './ResultsPage';
+import { FILES } from '../facialjson'; 
 
 /* ---------- utils ---------- */
 const dataURLToBlob = (dataURL) => {
@@ -15,29 +16,98 @@ const dataURLToBlob = (dataURL) => {
 
 /* ---------- FACE DATA ---------- */
 const DEFAULT_LAYER = {
-    neck: 0, head: 1, hair: 3, ears: 0,
+    neck: 0, face: 1, hair: 3, ears: 0,
     eyes: 4, nose: 4, eyebrows: 2, lips: 4, marks: 5, accessories: 6,
 };
 
-const FACE_PARTS = {
-    head: [
-        { id: 'head_1', name: 'Head A', category: 'head', src: '/assets/components/head1.jpg', width: 220, height: 260 },
-        { id: 'head_2', name: 'Head B', category: 'head', src: '/assets/components/head2.jpg', width: 220, height: 260 },
-    ],
-    eyes: [
-        { id: 'eyes_1', name: 'Eyes A', category: 'eyes', src: '/assets/components/eyes1.jpg', width: 150, height: 100 },
-    ],
-    nose: [
-        { id: 'nose_1', name: 'Nose A', category: 'nose', src: '/assets/components/nose.jpg', width: 80, height: 100 },
-    ],
-    lips: [
-         { id: 'lips1', name: 'Lips A', category: 'lips', src: '/assets/components/lips.jpg', width: 170, height: 100 },
-    ],
-    hair: [], ears: [], eyebrows: [], marks: [], neck: [], accessories: [],
+// Default canvas dimensions per category (width × height in px).
+// Used when placing a new element; can be adjusted by the user afterwards.
+const CATEGORY_DEFAULT_SIZE = {
+    face:        { width: 400, height: 500 },
+    neck:        { width: 400, height: 500 },
+    hair:        { width: 400, height: 500 },
+    ears:        { width: 400, height: 500 },
+    eyes:        { width: 400, height: 500 },
+    nose:        { width: 400, height: 500 },
+    eyebrows:    { width: 400, height: 500 },
+    lips:        { width: 400, height: 500 },
+    marks:       { width: 400, height: 500 },
+    accessories: { width: 400, height: 500 },
 };
 
+/**
+ * Derive a human-readable label and category from a dataset filename.
+ *
+ * Expected pattern (from the dataset):
+ *   <category>-<gender><variant>-<index>-<sub>-<size>.png
+ *
+ * Examples
+ *   lips-m1-012-01-sz1.png   →  category=lips,   label="Lips M1 #012-01"
+ *   neck-f-017-01-sz1.png    →  category=neck,   label="Neck F  #017-01"
+ *   eyes-m2-003-02-sz1.png   →  category=eyes,   label="Eyes M2 #003-02"
+ *
+ * Any filename that doesn't match the pattern falls back gracefully.
+ */
+function parseFilename(filename) {
+    // Strip extension
+    const base = filename.replace(/\.[^.]+$/, '');
+
+    // Known categories ordered longest-first so "eyebrows" matches before "eye"
+    const KNOWN = [
+        'eyebrows', 'accessories', 'marks',
+        'face', 'neck', 'hair', 'ears', 'eyes', 'nose', 'lips',
+    ];
+
+    let category = 'accessories';
+    for (const c of KNOWN) {
+        if (base.toLowerCase().startsWith(c)) { category = c; break; }
+    }
+
+    // Try to extract variant + index tokens after the category prefix
+    // e.g.  "lips-m1-012-01-sz1"  →  parts = ["m1","012","01","sz1"]
+    const rest  = base.slice(category.length).replace(/^[-_]/, '');
+    const parts = rest.split(/[-_]/).filter(Boolean);
+
+    // Drop trailing size token like "sz1", "sz2"
+    const filtered = parts.filter(p => !/^sz\d+$/i.test(p));
+
+    // Build a compact display name: "Lips M1 #012-01"
+    let label = category.charAt(0).toUpperCase() + category.slice(1);
+    if (filtered.length >= 1) label += ' ' + filtered[0].toUpperCase();     // variant/gender
+    if (filtered.length >= 3) label += ' #' + filtered[1] + '-' + filtered[2]; // index-sub
+    else if (filtered.length === 2) label += ' #' + filtered[1];
+
+    return { category, label };
+}
+
+function loadDatasetParts() {
+    const map = {};
+
+    for (const filename of FILES) {
+        const { category, label } = parseFilename(filename);
+        const thumbName = filename.replace(/\.png$/i, '.webp');
+
+        if (!map[category]) map[category] = [];
+
+        const size = CATEGORY_DEFAULT_SIZE[category] ?? { width: 120, height: 120 };
+        const BASE = import.meta.env.BASE_URL;
+        console.log(BASE);
+        map[category].push({
+            id: `${category}_${filename}`,
+            name: label,
+            category,
+            filename,
+            thumbnailSrc: `/FacialDataset/Thumbnails/${thumbName}`,
+            src: `/FacialDataset/Elements/${filename}`,
+            ...size,
+        });
+    }
+
+    return map;
+}
+
 const CATEGORIES = [
-    { name: 'head',        icon: '⬤',  label: 'Head' },
+    { name: 'face',        icon: '⬤',  label: 'Head' },
     { name: 'neck',        icon: '⬤',  label: 'Neck' },
     { name: 'hair',        icon: '⬤',  label: 'Hair' },
     { name: 'eyes',        icon: '⬤',  label: 'Eyes' },
@@ -79,12 +149,32 @@ const Builder = () => {
     const [search, setSearch] = useState('');
     const [resultsView, setResultsView] = useState(null); // null | { sketchURL }
     const [detecting, setDetecting] = useState(false);
+    const [showElementsPanel, setShowElementsPanel] = useState(false);
     const stageRef = useRef(null);
+
+    // Dataset parts loaded from backend
+    const [faceParts, setFaceParts]       = useState({});
+    const [partsLoading, setPartsLoading] = useState(true);
+    const [partsError, setPartsError]     = useState(null);
+
+    const STAGE_WIDTH = 400;
+    const STAGE_HEIGHT = 500;
+
+    useEffect(() => {
+        try {
+            const map = loadDatasetParts();
+            setFaceParts(map);
+        } catch (err) {
+            setPartsError(err.message);
+        } finally {
+            setPartsLoading(false);
+        }
+    }, []);
 
     const selectedElement = elements.find(el => el.instanceId === selectedId);
 
     const addElement = (component) => {
-        const newEl = { instanceId: Date.now(), ...component, x: 240, y: 170, rotation: 0 };
+        const newEl = { instanceId: Date.now(), ...component, x: 0, y: 0, w: 400, h: 500, rotation: 0 };
         const targetLayer = DEFAULT_LAYER[component.category] ?? 10;
         setElements(prev => {
             const insertIndex = prev.findIndex(el => (DEFAULT_LAYER[el.category] ?? 10) > targetLayer);
@@ -142,6 +232,25 @@ const Builder = () => {
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [selectedId]);
 
+    /* ── SHARED UTIL: composite Konva snapshot onto a white background ── */
+    const getWhiteBackgroundDataURL = (pixelRatio = 2) => new Promise((resolve) => {
+        const stage = stageRef.current;
+        if (!stage) return resolve(null);
+        const rawDataURL = stage.toDataURL({ pixelRatio });
+        const img = new window.Image();
+        img.onload = () => {
+            const offscreen = document.createElement('canvas');
+            offscreen.width  = STAGE_WIDTH  * pixelRatio;
+            offscreen.height = STAGE_HEIGHT * pixelRatio;
+            const ctx = offscreen.getContext('2d');
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, offscreen.width, offscreen.height);
+            ctx.drawImage(img, 0, 0);
+            resolve(offscreen.toDataURL('image/png'));
+        };
+        img.src = rawDataURL;
+    });
+
     /* ── DETECT FACE ── */
     const detectFace = async () => {
         const stage = stageRef.current;
@@ -149,8 +258,8 @@ const Builder = () => {
 
         setDetecting(true);
 
-        // capture canvas snapshot
-        const dataURL = stage.toDataURL({ pixelRatio: 2 });
+        // capture canvas snapshot with white background
+        const dataURL = await getWhiteBackgroundDataURL(2);
 
         try {
             const imageBlob = dataURLToBlob(dataURL);
@@ -171,10 +280,9 @@ const Builder = () => {
         }
     };
 
-    const exportPNG = () => {
-        const stage = stageRef.current;
-        if (!stage) return;
-        const dataURL = stage.toDataURL({ pixelRatio: 2 });
+    const exportPNG = async () => {
+        const dataURL = await getWhiteBackgroundDataURL(2);
+        if (!dataURL) return;
         const link = document.createElement('a');
         link.download = 'netra-x-sketch.png';
         link.href = dataURL;
@@ -192,10 +300,9 @@ const Builder = () => {
         );
     }
 
-    const parts = (FACE_PARTS[activeCategory] || []).filter(p =>
+    const parts = ((faceParts[activeCategory] || []).filter(p =>
         p.name.toLowerCase().includes(search.toLowerCase())
-    );
-
+    ));
     return (
         <div className="h-screen flex flex-col overflow-hidden" style={{ background: '#080810', fontFamily: "'Inter', sans-serif" }}>
 
@@ -227,10 +334,23 @@ const Builder = () => {
                 </div>
 
                 <div className="flex items-center gap-2">
-                    <div className="text-xs px-3 py-1.5 rounded-full"
-                        style={{ color: '#4A4A6A', border: '1px solid #1A1A2E' }}>
+                    <button
+                        onClick={() => setShowElementsPanel(p => !p)}
+                        className="text-xs px-3 py-1.5 rounded-full transition-all flex items-center gap-1.5"
+                        style={{
+                            color: showElementsPanel ? '#00D4A0' : '#4A4A6A',
+                            border: showElementsPanel ? '1px solid rgba(0,212,160,0.35)' : '1px solid #1A1A2E',
+                            background: showElementsPanel ? 'rgba(0,212,160,0.07)' : 'transparent',
+                            cursor: 'pointer',
+                        }}>
+                        <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
+                            <rect x="0.5" y="0.5" width="4" height="4" rx="1" stroke="currentColor" strokeWidth="1"/>
+                            <rect x="6.5" y="0.5" width="4" height="4" rx="1" stroke="currentColor" strokeWidth="1"/>
+                            <rect x="0.5" y="6.5" width="4" height="4" rx="1" stroke="currentColor" strokeWidth="1"/>
+                            <rect x="6.5" y="6.5" width="4" height="4" rx="1" stroke="currentColor" strokeWidth="1"/>
+                        </svg>
                         {elements.length} element{elements.length !== 1 ? 's' : ''}
-                    </div>
+                    </button>
                     <button onClick={exportPNG}
                         className="text-xs px-4 py-1.5 rounded-full transition-all"
                         style={{ border: '1px solid #1A1A2E', color: '#8888A8', background: 'transparent' }}
@@ -329,23 +449,88 @@ const Builder = () => {
 
                     <div className="flex-1 overflow-y-auto px-3 pb-3"
                         style={{ scrollbarWidth: 'thin', scrollbarColor: '#1A1A2E transparent' }}>
-                        {parts.length === 0 ? (
-                            <div className="pt-8 text-center">
-                                <p className="text-xs" style={{ color: '#2A2A4A' }}>No parts yet</p>
+
+                        {/* Loading state */}
+                        {partsLoading && (
+                            <div className="pt-8 flex flex-col items-center gap-3">
+                                <svg width="18" height="18" viewBox="0 0 18 18" style={{ animation: 'spin 1s linear infinite' }}>
+                                    <circle cx="9" cy="9" r="7" stroke="#1A1A2E" strokeWidth="2" fill="none"/>
+                                    <path d="M9 2a7 7 0 0 1 7 7" stroke="#00D4A0" strokeWidth="2" strokeLinecap="round" fill="none"/>
+                                </svg>
+                                <p className="text-[10px]" style={{ color: '#2A2A4A' }}>Loading dataset…</p>
                             </div>
-                        ) : (
+                        )}
+
+                        {/* Error state */}
+                        {!partsLoading && partsError && (
+                            <div className="pt-6 px-1 text-center flex flex-col gap-2">
+                                <p className="text-[10px]" style={{ color: '#804040' }}>⚠ Could not load components</p>
+                                <p className="text-[9px] break-all" style={{ color: '#3A2A2A' }}>{partsError}</p>
+                                <button
+                                    onClick={() => {
+                                        setPartsLoading(true);
+                                        setPartsError(null);
+                                        try {
+                                            const m = loadDatasetParts();
+                                            setFaceParts(m);
+                                        } catch (e) {
+                                            setPartsError(e.message);
+                                        } finally {
+                                            setPartsLoading(false);
+                                        }
+                                    }}
+                                    className="mt-1 text-[10px] px-3 py-1 rounded-full self-center"
+                                    style={{ border: '1px solid #3A2020', color: '#A05050', background: 'transparent' }}>
+                                    ↻ Retry
+                                </button>
+                            </div>
+                        )}
+
+                        {/* Empty state */}
+                        {!partsLoading && !partsError && parts.length === 0 && (
+                            <div className="pt-8 text-center">
+                                <p className="text-xs" style={{ color: '#2A2A4A' }}>
+                                    {search ? 'No parts match your search' : 'No parts in this category'}
+                                </p>
+                            </div>
+                        )}
+
+                        {/* Parts grid — thumbnail in panel, full component on canvas */}
+                        {!partsLoading && !partsError && parts.length > 0 && (
                             <div className="grid grid-cols-2 gap-2 mt-2">
                                 {parts.map(comp => (
                                     <button key={comp.id} onClick={() => addElement(comp)}
+                                        title={comp.name}
                                         className="rounded-lg overflow-hidden transition-all flex flex-col items-center p-2 gap-1.5 group"
                                         style={{ border: '1px solid #1A1A2E', background: '#0D0D18' }}
                                         onMouseEnter={e => { e.currentTarget.style.borderColor = '#00D4A030'; e.currentTarget.style.background = '#121220'; }}
                                         onMouseLeave={e => { e.currentTarget.style.borderColor = '#1A1A2E'; e.currentTarget.style.background = '#0D0D18'; }}>
-                                        <img src={comp.src} alt={comp.name}
-                                            className="w-14 h-14 object-cover rounded"
-                                            style={{ filter: 'grayscale(20%)' }}
-                                        />
-                                        <span className="text-[9px] font-medium tracking-wide" style={{ color: '#4A4A6A' }}>
+
+                                        {/* Show thumbnail; fallback to a placeholder on error */}
+                                        <div className="w-14 h-14 rounded overflow-hidden flex items-center justify-center"
+                                            style={{ background: '#0A0A14' }}>
+                                            <img
+                                                src={comp.thumbnailSrc}
+                                                alt={comp.name}
+                                                className="w-full h-full object-cover"
+                                                style={{ filter: 'grayscale(15%)' }}
+                                                onError={e => {
+                                                    e.target.style.display = 'none';
+                                                    e.target.nextSibling.style.display = 'flex';
+                                                }}
+                                            />
+                                            {/* Fallback icon shown only when image fails */}
+                                            <div style={{ display: 'none', width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center' }}>
+                                                <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+                                                    <rect x="1" y="1" width="20" height="20" rx="3" stroke="#2A2A4A" strokeWidth="1"/>
+                                                    <path d="M6 16l4-5 3 3.5 2-2.5 3 4H6z" fill="#2A2A4A"/>
+                                                    <circle cx="14" cy="8" r="2" fill="#2A2A4A"/>
+                                                </svg>
+                                            </div>
+                                        </div>
+
+                                        <span className="text-[9px] font-medium tracking-wide text-center leading-tight w-full truncate"
+                                            style={{ color: '#4A4A6A' }}>
                                             {comp.name}
                                         </span>
                                     </button>
@@ -369,7 +554,7 @@ const Builder = () => {
 
                     <div className="relative shadow-2xl"
                         style={{ boxShadow: '0 0 0 1px #1A1A2E, 0 32px 64px rgba(0,0,0,0.8)' }}>
-                        <Stage ref={stageRef} width={400} height={500}
+                        <Stage ref={stageRef} width={STAGE_WIDTH} height={STAGE_HEIGHT}
                             style={{ background: '#F5F4F0', display: 'block' }}
                             onMouseDown={(e) => { if (e.target === e.target.getStage()) setSelectedId(null); }}>
                             <Layer>
@@ -383,6 +568,180 @@ const Builder = () => {
                             </Layer>
                         </Stage>
                     </div>
+
+                    {/* ── ELEMENTS PANEL OVERLAY ── */}
+                    {showElementsPanel && (
+                        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-50 flex flex-col"
+                            style={{
+                                width: 320,
+                                maxHeight: 'calc(100% - 24px)',
+                                background: '#0D0D18',
+                                border: '1px solid #1A1A2E',
+                                borderRadius: 12,
+                                boxShadow: '0 24px 60px rgba(0,0,0,0.9), 0 0 0 1px rgba(0,212,160,0.06)',
+                                overflow: 'hidden',
+                            }}>
+                            {/* Panel header */}
+                            <div className="flex items-center justify-between px-4 py-3 shrink-0"
+                                style={{ borderBottom: '1px solid #1A1A2E' }}>
+                                <div className="flex items-center gap-2">
+                                    <p className="text-[9px] font-semibold tracking-[0.15em] uppercase" style={{ color: '#00D4A0' }}>
+                                        Canvas Elements
+                                    </p>
+                                    <span className="text-[9px] px-1.5 py-0.5 rounded-full"
+                                        style={{ background: 'rgba(0,212,160,0.1)', color: '#00D4A0', border: '1px solid rgba(0,212,160,0.2)' }}>
+                                        {elements.length}
+                                    </span>
+                                </div>
+                                <button onClick={() => setShowElementsPanel(false)}
+                                    className="w-6 h-6 flex items-center justify-center rounded-md transition-all"
+                                    style={{ color: '#3A3A5A', border: '1px solid #1A1A2E', background: 'transparent' }}
+                                    onMouseEnter={e => { e.currentTarget.style.color = '#9090C0'; e.currentTarget.style.borderColor = '#2A2A4E'; }}
+                                    onMouseLeave={e => { e.currentTarget.style.color = '#3A3A5A'; e.currentTarget.style.borderColor = '#1A1A2E'; }}>
+                                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                                        <path d="M2 2l6 6M8 2l-6 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                                    </svg>
+                                </button>
+                            </div>
+
+                            {elements.length === 0 ? (
+                                <div className="flex flex-col items-center justify-center gap-2 py-10 px-4">
+                                    <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                                        <rect x="1" y="1" width="26" height="26" rx="5" stroke="#1E1E32" strokeWidth="1.2"/>
+                                        <path d="M9 14h10M14 9v10" stroke="#1E1E32" strokeWidth="1.2" strokeLinecap="round"/>
+                                    </svg>
+                                    <p className="text-[11px] text-center" style={{ color: '#2A2A4A' }}>
+                                        No elements on canvas yet.<br/>Add parts from the left panel.
+                                    </p>
+                                </div>
+                            ) : (
+                                <div className="overflow-y-auto flex-1"
+                                    style={{ scrollbarWidth: 'thin', scrollbarColor: '#1A1A2E transparent' }}>
+                                    {/* List of elements (reverse so top-most is first) */}
+                                    {[...elements].reverse().map((el, idx) => {
+                                        const isActive = el.instanceId === selectedId;
+                                        const layerPos = elements.length - 1 - idx; // index in actual array
+                                        return (
+                                            <div key={el.instanceId}>
+                                                {/* Element row */}
+                                                <button
+                                                    onClick={() => {
+                                                        setSelectedId(el.instanceId);
+                                                    }}
+                                                    className="w-full flex items-center gap-3 px-4 py-2.5 transition-all text-left"
+                                                    style={{
+                                                        background: isActive ? 'rgba(0,212,160,0.06)' : 'transparent',
+                                                        borderLeft: isActive ? '2px solid #00D4A0' : '2px solid transparent',
+                                                    }}
+                                                    onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = 'rgba(255,255,255,0.02)'; }}
+                                                    onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}>
+                                                    {/* Thumbnail */}
+                                                    <div className="w-8 h-8 rounded-md overflow-hidden shrink-0 flex items-center justify-center"
+                                                        style={{ background: '#0A0A14', border: '1px solid #1A1A2E' }}>
+                                                        <img src={el.thumbnailSrc} alt={el.name}
+                                                            className="w-full h-full object-cover"
+                                                            onError={e => { e.target.style.display = 'none'; }}/>
+                                                    </div>
+                                                    {/* Info */}
+                                                    <div className="flex-1 min-w-0">
+                                                        <p className="text-[11px] font-medium truncate" style={{ color: isActive ? '#00D4A0' : '#9090B0' }}>
+                                                            {el.name}
+                                                        </p>
+                                                        <p className="text-[9px] mt-0.5" style={{ color: '#3A3A5A' }}>
+                                                            {Math.round(el.x)}, {Math.round(el.y)} · {Math.round(el.width)}×{Math.round(el.height)}
+                                                        </p>
+                                                    </div>
+                                                    {/* Layer badge */}
+                                                    <span className="text-[9px] shrink-0 px-1.5 py-0.5 rounded"
+                                                        style={{ background: '#0A0A14', color: '#3A3A5A', border: '1px solid #1A1A2E', fontFamily: 'monospace' }}>
+                                                        L{layerPos}
+                                                    </span>
+                                                </button>
+
+                                                {/* Inline edit fields when selected */}
+                                                {isActive && (
+                                                    <div className="px-4 pb-3 pt-1 flex flex-col gap-2"
+                                                        style={{ background: 'rgba(0,212,160,0.03)', borderBottom: '1px solid rgba(0,212,160,0.08)' }}>
+                                                        <div className="grid grid-cols-2 gap-2">
+                                                            <div>
+                                                                <p className="text-[9px] font-medium tracking-widest uppercase mb-1" style={{ color: '#4A4A6A' }}>X</p>
+                                                                <input type="number" value={Math.round(el.x)}
+                                                                    onChange={e => updateElement(el.instanceId, { x: Number(e.target.value) })}
+                                                                    className="w-full px-2 py-1 rounded-md text-xs focus:outline-none"
+                                                                    style={{ background: '#0A0A14', border: '1px solid #1E1E32', color: '#D8D8F0', fontFamily: 'monospace' }}
+                                                                    onFocus={e => e.target.style.borderColor = '#00D4A0'}
+                                                                    onBlur={e => e.target.style.borderColor = '#1E1E32'}/>
+                                                            </div>
+                                                            <div>
+                                                                <p className="text-[9px] font-medium tracking-widest uppercase mb-1" style={{ color: '#4A4A6A' }}>Y</p>
+                                                                <input type="number" value={Math.round(el.y)}
+                                                                    onChange={e => updateElement(el.instanceId, { y: Number(e.target.value) })}
+                                                                    className="w-full px-2 py-1 rounded-md text-xs focus:outline-none"
+                                                                    style={{ background: '#0A0A14', border: '1px solid #1E1E32', color: '#D8D8F0', fontFamily: 'monospace' }}
+                                                                    onFocus={e => e.target.style.borderColor = '#00D4A0'}
+                                                                    onBlur={e => e.target.style.borderColor = '#1E1E32'}/>
+                                                            </div>
+                                                            <div>
+                                                                <p className="text-[9px] font-medium tracking-widests uppercase mb-1" style={{ color: '#4A4A6A' }}>W</p>
+                                                                <input type="number" value={Math.round(el.width)}
+                                                                    onChange={e => updateElement(el.instanceId, { width: Number(e.target.value) })}
+                                                                    className="w-full px-2 py-1 rounded-md text-xs focus:outline-none"
+                                                                    style={{ background: '#0A0A14', border: '1px solid #1E1E32', color: '#D8D8F0', fontFamily: 'monospace' }}
+                                                                    onFocus={e => e.target.style.borderColor = '#00D4A0'}
+                                                                    onBlur={e => e.target.style.borderColor = '#1E1E32'}/>
+                                                            </div>
+                                                            <div>
+                                                                <p className="text-[9px] font-medium tracking-widest uppercase mb-1" style={{ color: '#4A4A6A' }}>H</p>
+                                                                <input type="number" value={Math.round(el.height)}
+                                                                    onChange={e => updateElement(el.instanceId, { height: Number(e.target.value) })}
+                                                                    className="w-full px-2 py-1 rounded-md text-xs focus:outline-none"
+                                                                    style={{ background: '#0A0A14', border: '1px solid #1E1E32', color: '#D8D8F0', fontFamily: 'monospace' }}
+                                                                    onFocus={e => e.target.style.borderColor = '#00D4A0'}
+                                                                    onBlur={e => e.target.style.borderColor = '#1E1E32'}/>
+                                                            </div>
+                                                        </div>
+                                                        <div>
+                                                            <p className="text-[9px] font-medium tracking-widest uppercase mb-1" style={{ color: '#4A4A6A' }}>Rotation</p>
+                                                            <input type="number" value={Math.round(el.rotation)}
+                                                                onChange={e => updateElement(el.instanceId, { rotation: Number(e.target.value) })}
+                                                                className="w-full px-2 py-1 rounded-md text-xs focus:outline-none"
+                                                                style={{ background: '#0A0A14', border: '1px solid #1E1E32', color: '#D8D8F0', fontFamily: 'monospace' }}
+                                                                onFocus={e => e.target.style.borderColor = '#00D4A0'}
+                                                                onBlur={e => e.target.style.borderColor = '#1E1E32'}/>
+                                                        </div>
+                                                        {/* Layer & Delete actions */}
+                                                        <div className="flex gap-1.5 pt-0.5">
+                                                            <button onClick={bringForward}
+                                                                className="flex-1 py-1 rounded text-[9px] transition-all"
+                                                                style={{ border: '1px solid #1A1A2E', color: '#6060A0', background: 'transparent' }}
+                                                                onMouseEnter={e => { e.target.style.borderColor = '#2A2A4E'; e.target.style.color = '#9090C0'; }}
+                                                                onMouseLeave={e => { e.target.style.borderColor = '#1A1A2E'; e.target.style.color = '#6060A0'; }}>
+                                                                ↑ Fwd
+                                                            </button>
+                                                            <button onClick={sendBackward}
+                                                                className="flex-1 py-1 rounded text-[9px] transition-all"
+                                                                style={{ border: '1px solid #1A1A2E', color: '#6060A0', background: 'transparent' }}
+                                                                onMouseEnter={e => { e.target.style.borderColor = '#2A2A4E'; e.target.style.color = '#9090C0'; }}
+                                                                onMouseLeave={e => { e.target.style.borderColor = '#1A1A2E'; e.target.style.color = '#6060A0'; }}>
+                                                                ↓ Back
+                                                            </button>
+                                                            <button onClick={() => { removeSelected(); }}
+                                                                className="flex-1 py-1 rounded text-[9px] transition-all"
+                                                                style={{ border: '1px solid #2A1A1A', color: '#804040', background: 'transparent' }}
+                                                                onMouseEnter={e => { e.target.style.background = '#1A0A0A'; e.target.style.color = '#C06060'; }}
+                                                                onMouseLeave={e => { e.target.style.background = 'transparent'; e.target.style.color = '#804040'; }}>
+                                                                ✕ Remove
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </main>
 
                 {/* ── RIGHT PANEL ── */}
