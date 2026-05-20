@@ -5,7 +5,7 @@ export const FILES = [
   "ears-f-041-01-sz1.png",
   "ears-m-048-01-sz1.png",
   "ears-m-062-01-sz1.png",
-  "ears-m-068-01-sz1.png",
+  "ears-m-068-01-sz1.png", 
   "ears-m1-012-01-sz1.png",
   "ears-m1-036-01-sz1.png",
   "ears-manik.png",
